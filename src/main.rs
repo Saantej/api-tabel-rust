@@ -41,14 +41,14 @@ async fn send_external_action(user_id: i32, db_pool: web::Data<Arc<tokio_postgre
     let action = if last_action == "come" { "left" } else { "come" };
 
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:8000/api/users/{}/{}/", user_id, action);
+    let url = format!("http://212.109.221.149:8002/api/users/{}/{}/", user_id, action);
     println!("{}", url);
 
     let response = client.post(&url)
         .send()
         .await?
         .error_for_status()?
-        .text() // Получаем тело ответа как текст
+        .text()
         .await?;
 
     println!("Ответ сервера: {}", response);
@@ -57,13 +57,6 @@ async fn send_external_action(user_id: i32, db_pool: web::Data<Arc<tokio_postgre
     update_last_action(&db_pool, user_id, &action).await?;
 
     Ok(())
-}
-
-
-
-async fn check_last_action(db_pool: &Arc<tokio_postgres::Client>, user_id: i32) -> Result<bool, Error> {
-    let row = db_pool.query_one("SELECT action FROM actions WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 1", &[&user_id]).await?;
-    Ok(row.get::<_, String>(0) == "come")
 }
 
 #[actix_web::main]
@@ -82,7 +75,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(client.clone()))
             .service(web::resource("/nfc_action").route(web::get().to(register_nfc_action)))
     })
-        .bind("127.0.0.1:1701")?
+        .bind("0.0.0.0:1701")?
         .run()
         .await
 }
