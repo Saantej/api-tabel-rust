@@ -41,7 +41,7 @@ async fn send_external_action(user_id: i32, db_pool: web::Data<Arc<tokio_postgre
     let action = if last_action == "come" { "left" } else { "come" };
 
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:8000/api/users/{}/{}/", user_id, action);
+    let url = format!("http://212.109.221.149:8000/api/users/{}/{}/", user_id, action);
     println!("{}", url);
 
     client.post(&url)
