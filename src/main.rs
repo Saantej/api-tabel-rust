@@ -1,89 +1,60 @@
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use std::error::Error;
 use serde::Deserialize;
-use std::sync::Arc;
-use tokio_postgres::{NoTls, Error};
-use reqwest;
-use std::time::SystemTime;
-use chrono::{DateTime, Utc};
-#[derive(Deserialize)]
-struct IdUser {
-    user_id: String,
+use actix_web::{web, App, HttpServer, Responder, Result};
+
+#[derive(Debug, Deserialize)]
+struct Event {
+    time0nd: Option<String>,
 }
 
-async fn register_nfc_action(db_pool: web::Data<Arc<tokio_postgres::Client>>, info: web::Query<IdUser>) -> Result<impl Responder, actix_web::Error> {
-    let user_id: i32 = info.user_id.parse().map_err(|_| actix_web::error::ErrorBadRequest("Invalid user_id"))?;
-
-    // Отправляем запрос на внешний сервер после проверки/регистрации действия
-    send_external_action(user_id, db_pool.clone()).await.map_err(|e| {
-        eprintln!("Ошибка при отправке действия на внешний сервер: {}", e);
-        actix_web::error::ErrorInternalServerError("Internal server error")
-    })?;
-
-    Ok(HttpResponse::Ok().body(format!("Действие для пользователя {} было успешно отправлено", user_id)))
-}
-
-async fn send_external_action(user_id: i32, db_pool: web::Data<Arc<tokio_postgres::Client>>) -> Result<(), Box<dyn std::error::Error>> {
-    let (last_action, last_action_time) = db_pool.query_one(
-        "SELECT action, timestamp FROM actions WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 1",
-        &[&user_id]
-    ).await.map(|row| {
-        let last_action: String = row.get(0);
-        let last_action_time: SystemTime = row.get(1);
-        let last_action_time = DateTime::<Utc>::from(last_action_time).naive_utc();
-        (last_action, last_action_time)
-    })?;
-    let now = chrono::Utc::now().naive_utc();
-
-    if now.signed_duration_since(last_action_time).num_seconds() < 10 {
-        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Подождите 10 секунд перед следующим действием")));
-    }
-
-    let action = if last_action == "come" { "left" } else { "come" };
-
+async fn handle_user_action() -> Result<impl Responder, Box<dyn std::error::Error>> {
+    let user_id = 52;
+    let event = get_data(user_id).await?;
+    let url_base = "http://212.109.221.149:8002/api/users/";
+    let action = if event == 0 {"come"} else {"left"};
+    let url = format!("{url_base}{user_id}/{action}/");
     let client = reqwest::Client::new();
-    let url = format!("http://212.109.221.149:8002/api/users/{}/{}/", user_id, action);
+    client.post(&url).send().await?;
     println!("{}", url);
 
-    let response = client.post(&url)
-        .send()
-        .await?
-        .error_for_status()?
-        .text()
-        .await?;
+    if event == 0 {
+        Ok("Пришел")
+    } else {
+        Ok("Ушел")
+    }
+}
 
-    println!("Ответ сервера: {}", response);
+async fn get_data(user_id: i32) -> Result<i32, Box<dyn Error>> {
+    let url = format!("http://212.109.221.149:8002/api/users/{}/get_data/", user_id);
+    let client = reqwest::Client::new();
+    let response = client.get(&url).send().await?;
 
-    println!("Успешно отправлено действие '{}' для пользователя {}", action, user_id);
-    update_last_action(&db_pool, user_id, &action).await?;
+    if response.status().is_success() {
+        let events: Vec<Event> = response.json().await?;
 
-    Ok(())
+        if let Some(first_event) = events.into_iter().nth(0) {
+            if first_event.time0nd.as_ref().map_or(true, |t| t.trim().is_empty()) {
+                Ok(1)
+            } else {
+                Ok(0)
+            }
+        } else {
+            Ok(3)
+        }
+    } else {
+        Err(format!("Ошибка при получении данных: {}", response.status()).into())
+    }
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let (client, connection) = tokio_postgres::connect("host=localhost user=pweb password=pweb dbname=tabel", NoTls).await.unwrap();
-    let client = Arc::new(client);
-
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
-
-    HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(client.clone()))
-            .service(web::resource("/nfc_action").route(web::get().to(register_nfc_action)))
+    HttpServer::new(|| {
+        App::new().route("/handle_user", web::get().to(handle_user_action))
     })
-        .bind("0.0.0.0:1701")?
+        .bind("0.0.0.0:4444")?
         .run()
         .await
 }
 
-async fn update_last_action(db_pool: &Arc<tokio_postgres::Client>, user_id: i32, action: &str) -> Result<(), Error> {
-    db_pool.execute(
-        "INSERT INTO actions (user_id, action, timestamp) VALUES ($1, $2, NOW())",
-        &[&user_id, &action]
-    ).await?;
-    Ok(())
-}
+
+
